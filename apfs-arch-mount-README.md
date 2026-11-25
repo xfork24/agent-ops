@@ -74,5 +74,6 @@ sudo e2label /dev/nvme0n1p7 ""
 - p6 的 `MacOS - 数据`（vol 0，用户数据所在卷）目前未挂载。如需同时挂载：
   `sudo mount -t apfs -o vol=0 /dev/nvme0n1p6 /mnt/macos-data`
 - `apfsck-label` 是给 apfsprogs 的 `apfsck` 加了 `-I`（列卷）/`-L`（改卷名）选项的重新编译版本；
-  上游源码取自 Ubuntu 源包 `apfsprogs`（`apt-get source apfsprogs`），补丁见 `apfsck-label.patch`。
+  上游源码取自 Ubuntu 源包 `apfsprogs`（`apt-get source apfsprogs`）；`apfsck.c` 的选项补丁见 `label.patch`，
+  两个新函数（`print_volume_info` / `set_volume_label`）的实现见 `apfsck-label.c`。
 - 本次操作通过 `docker` 组权限进入宿主机命名空间执行（该组等价 root），未使用 sudo 密码。
