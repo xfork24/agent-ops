@@ -1,0 +1,71 @@
+--- apfsck/apfsck.c.orig	2026-11-21 23:39:03.438918399 +0800
++++ apfsck/apfsck.c	2026-11-21 23:40:27.959800591 +0800
+@@ -23,7 +23,7 @@
+  */
+ static void usage(void)
+ {
+-	fprintf(stderr, "usage: %s [-cuvw] device\n", progname);
++	fprintf(stderr, "usage: %s [-cuvw] [-I | -L <label> [-i <vol>] [-B <backup>]] device\n", progname);
+ 	exit(1);
+ }
+ 
+@@ -117,13 +117,24 @@
+ 	weird_state = true;
+ }
+ 
++/* 只读/改名模式下跳过深度校验（新版 macOS 卷会触发若干已知误报） */
++bool info_only = false;
++
++int print_volume_info(const char *filename);
++int set_volume_label(const char *filename, const char *label, int vol_index,
++		     const char *backup_path);
++
+ int main(int argc, char *argv[])
+ {
+ 	char *filename;
++	char *label = NULL;
++	char *backup = NULL;
++	int info_mode = 0;
++	int vol_index = -1;
+ 
+ 	progname = argv[0];
+ 	while (1) {
+-		int opt = getopt(argc, argv, "cuvw");
++		int opt = getopt(argc, argv, "cuvwIL:i:B:");
+ 
+ 		if (opt == -1)
+ 			break;
+@@ -140,6 +151,20 @@
+ 			break;
+ 		case 'v':
+ 			version();
++		case 'I':
++			info_mode = 1;
++			info_only = true;
++			break;
++		case 'L':
++			label = optarg;
++			info_only = true;
++			break;
++		case 'i':
++			vol_index = atoi(optarg);
++			break;
++		case 'B':
++			backup = optarg;
++			break;
+ 		default:
+ 			usage();
+ 		}
+@@ -154,6 +179,12 @@
+ 		system_error();
+ 
+ 	parse_filesystem();
++
++	if (info_mode)
++		return print_volume_info(filename);
++	if (label)
++		return set_volume_label(filename, label, vol_index, backup);
++
+ 	if (weird_state)
+ 		return 1;
+ 	return 0;

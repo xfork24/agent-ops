@@ -1,0 +1,9 @@
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+
+# Compiled binary — build from apfsck-label.c + label.patch
+/apfsck-label
+
+# Runtime logs (may contain account identifiers)
+*.log

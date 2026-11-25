@@ -1,0 +1,17 @@
+# /etc/fstab: static file system information.
+#
+# Use 'blkid' to print the universally unique identifier for a
+# device; this may be used with UUID= as a more robust way to name devices
+# that works even when disks are added and removed. See fstab(5).
+#
+# <file system> <mount point>   <type>  <options>       <dump>  <pass>
+# / was on /dev/nvme0n1p5 during curtin installation
+/dev/disk/by-uuid/f569fe99-7ee7-4df0-9364-360a644307a7 / ext4 defaults 0 1
+# /boot/efi was on /dev/nvme0n1p1 during curtin installation
+/dev/disk/by-uuid/1061-4E5B /boot/efi vfat defaults 0 1
+
+# Windows NTFS 分区 /dev/nvme0n1p3 (自动挂载)
+UUID=024661E44661D945 /mnt/windows ntfs-3g defaults,uid=1000,gid=1000,umask=022,noatime,nofail,x-systemd.automount,windows_names,x-gvfs-show,x-gvfs-name=Windows 0 0
+
+# Linux swap
+/dev/mapper/cryptswap none swap sw,noauto,nofail,x-systemd.device-timeout=90s 0 0
