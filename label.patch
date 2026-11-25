@@ -1,5 +1,13 @@
---- apfsck/apfsck.c.orig	2026-11-21 23:39:03.438918399 +0800
-+++ apfsck/apfsck.c	2026-11-21 23:40:27.959800591 +0800
+# apfsck 卷名读取/写入补丁（-I 列卷、-L 改名）
+#
+# 基线: apfsprogs v0.2.1 (commit e388999)
+# 用法: cp apfsck-label.c apfsck/ && patch -p0 < label.patch && make -C apfsck
+#
+# -I/-L 走"只读"路径：只解析容器 object map 以定位卷超级块，
+# 跳过容器 spaceman/reaper/卷组以及每个卷的 catalog 遍历等深度校验，
+# 因为这些校验在新版 macOS 卷上会误报并直接退出。
+--- apfsck/apfsck.c
++++ apfsck/apfsck.c
 @@ -23,7 +23,7 @@
   */
  static void usage(void)
@@ -69,3 +77,138 @@
  	if (weird_state)
  		return 1;
  	return 0;
+--- apfsck/apfsck.h
++++ apfsck/apfsck.h
+@@ -13,6 +13,7 @@
+ extern struct volume_superblock *vsb;	/* Volume superblock */
+ extern int fd;				/* File descriptor for the device */
+ extern bool ongoing_query;		/* Are we currently running a query? */
++extern bool info_only;			/* -I/-L: skip deep verification */
+ 
+ /* Option flags */
+ #define	OPT_REPORT_CRASH	1 /* Report on-disk signs of a past crash */
+--- apfsck/object.c
++++ apfsck/object.c
+@@ -242,6 +242,16 @@
+ 	u64 data_end = sb->s_data_base + sb->s_data_blocks;
+ 	u64 valid_start;
+ 
++	/*
++	 * These checks only make sense after a full verification pass, which
++	 * allocated the mappings as it went. The label tools (-I/-L) skip that
++	 * pass, so most mappings are legitimately unseen: just free them.
++	 */
++	if (info_only) {
++		free(entry);
++		return;
++	}
++
+ 	if (!map->m_seen)
+ 		report("Checkpoint map", "no object for mapping.");
+ 
+--- apfsck/super.c
++++ apfsck/super.c
+@@ -763,12 +763,29 @@
+ 	struct spaceman *sm = &sb->s_spaceman;
+ 	u64 alloc_count, reserve_blkcnt, quota_blkcnt;
+ 
++	/*
++	 * Extract every field the label tools need before running any check:
++	 * in info_only mode the function returns right after this block, so
++	 * that a verification pass cannot abort the run on a volume that
++	 * apfsck does not fully understand (see check_container()).
++	 */
++	vsb->v_index = le32_to_cpu(vsb->v_raw->apfs_fs_index);
++	vsb->v_extref_oid = le64_to_cpu(vsb->v_raw->apfs_extentref_tree_oid);
++	vsb->v_omap_oid = le64_to_cpu(vsb->v_raw->apfs_omap_oid);
++	vsb->v_snap_meta_oid = le64_to_cpu(vsb->v_raw->apfs_snap_meta_tree_oid);
++	vsb->v_fext_tree_oid = le64_to_cpu(vsb->v_raw->apfs_fext_tree_oid);
++	vsb->v_integrity_oid = le64_to_cpu(vsb->v_raw->apfs_integrity_meta_oid);
++	vsb->v_next_obj_id = le64_to_cpu(vsb->v_raw->apfs_next_obj_id);
++	vsb->v_next_doc_id = le32_to_cpu(vsb->v_raw->apfs_next_doc_id);
++
++	if (info_only)
++		return;
++
+ 	if (vsb->v_obj.type != APFS_OBJECT_TYPE_FS)
+ 		report("Volume superblock", "wrong object type.");
+ 	if (vsb->v_obj.subtype != APFS_OBJECT_TYPE_INVALID)
+ 		report("Volume superblock", "wrong object subtype.");
+ 
+-	vsb->v_index = le32_to_cpu(vsb->v_raw->apfs_fs_index);
+ 	if (vsb->v_index != vol)
+ 		report("Volume superblock", "wrong reported volume number.");
+ 	if (le32_to_cpu(vsb->v_raw->apfs_magic) != APFS_MAGIC)
+@@ -806,7 +823,6 @@
+ 	vsb->v_next_obj_id = le64_to_cpu(vsb->v_raw->apfs_next_obj_id);
+ 	if (vsb->v_next_obj_id < APFS_MIN_USER_INO_NUM)
+ 		report("Volume superblock", "next catalog id is invalid.");
+-	vsb->v_next_doc_id = le32_to_cpu(vsb->v_raw->apfs_next_doc_id);
+ 	if (vsb->v_next_doc_id < APFS_MIN_DOC_ID)
+ 		report("Volume superblock", "next document id is invalid.");
+ 
+@@ -877,12 +893,6 @@
+ 	parse_volume_group_info();
+ 
+ 	check_doc_id_index_flags(le32_to_cpu(vsb->v_raw->apfs_doc_id_index_flags));
+-
+-	vsb->v_extref_oid = le64_to_cpu(vsb->v_raw->apfs_extentref_tree_oid);
+-	vsb->v_omap_oid = le64_to_cpu(vsb->v_raw->apfs_omap_oid);
+-	vsb->v_snap_meta_oid = le64_to_cpu(vsb->v_raw->apfs_snap_meta_tree_oid);
+-	vsb->v_fext_tree_oid = le64_to_cpu(vsb->v_raw->apfs_fext_tree_oid);
+-	vsb->v_integrity_oid = le64_to_cpu(vsb->v_raw->apfs_integrity_meta_oid);
+ }
+ 
+ /**
+@@ -1101,6 +1111,33 @@
+ 
+ 	/* Check for corruption in the container object map... */
+ 	sb->s_omap = parse_omap_btree(le64_to_cpu(sb->s_raw->nx_omap_oid));
++
++	if (info_only) {
++		/*
++		 * -I/-L only read (and possibly rewrite) the volume superblock.
++		 * The container object map above is required to resolve the
++		 * volume oids, but everything else that follows is a
++		 * verification pass: the reaper, the space manager, the volume
++		 * group, and for each volume the catalog walk, extent refs and
++		 * snapshots.  On newer macOS volumes those checks hit known
++		 * false positives and abort the run before the label can be
++		 * read or written, so skip them.
++		 */
++		for (vol = 0; vol < APFS_NX_MAX_FILE_SYSTEMS; ++vol) {
++			vsb = alloc_volume_super(false);
++			if (!map_volume_super(vol, vsb)) {
++				free(vsb);
++				continue;
++			}
++			sb->s_volumes[vol] = vsb;
++			vsb = NULL;
++		}
++
++		free_omap_table(sb->s_omap_table);
++		sb->s_omap_table = NULL;
++		return;
++	}
++
+ 	/* ...and in the reaper */
+ 	sb->s_reaper = parse_reaper(le64_to_cpu(sb->s_raw->nx_reaper_oid));
+ 
+@@ -1438,7 +1475,8 @@
+ 
+ 	if (!sb->s_raw)
+ 		report("Checkpoint descriptor area", "no valid superblocks.");
+-	main_super_compare(sb->s_raw, msb_raw_copy);
++	if (!info_only)
++		main_super_compare(sb->s_raw, msb_raw_copy);
+ 	munmap(msb_raw_copy, sb->s_blocksize);
+ }
+ 
+--- apfsck/Makefile
++++ apfsck/Makefile
+@@ -1,4 +1,4 @@
+-SRCS = apfsck.c btree.c compress.c crypto.c dir.c extents.c htable.c \
++SRCS = apfsck.c apfsck-label.c btree.c compress.c crypto.c dir.c extents.c htable.c \
+        inode.c key.c object.c snapshot.c spaceman.c super.c xattr.c
+ OBJS = $(SRCS:.c=.o)
+ DEPS = $(SRCS:.c=.d)

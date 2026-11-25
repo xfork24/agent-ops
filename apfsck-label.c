@@ -50,7 +50,7 @@ int print_volume_info(const char *filename)
 		       vol, (unsigned long long)v->v_obj.block_nr,
 		       (unsigned long long)v->v_obj.xid,
 		       (char *)raw->apfs_volname);
-		print_uuid(raw->apfs_vol_uuid);
+		print_uuid((const u8 *)raw->apfs_vol_uuid);
 		printf("\n");
 	}
 	if (!found)
@@ -62,9 +62,9 @@ int set_volume_label(const char *filename, const char *label, int vol_index,
 		     const char *backup_path)
 {
 	struct volume_superblock *v;
-	struct apfs_superblock *raw;
 	struct apfs_superblock *writable;
 	struct apfs_obj_phys *obj;
+	char old_name[APFS_VOLNAME_LEN];
 	size_t len = strlen(label);
 	size_t bsize;
 	void *map;
@@ -89,7 +89,6 @@ int set_volume_label(const char *filename, const char *label, int vol_index,
 	}
 
 	v = sb->s_volumes[vol_index];
-	raw = v->v_raw;
 	bsize = sb->s_blocksize;
 
 	wfd = open(filename, O_RDWR);
@@ -114,6 +113,9 @@ int set_volume_label(const char *filename, const char *label, int vol_index,
 
 	writable = (struct apfs_superblock *)map;
 
+	/* 先留一份旧名，下面覆盖后就取不到了 */
+	snprintf(old_name, sizeof(old_name), "%s", (char *)writable->apfs_volname);
+
 	/* 写入新卷名，剩余部分清零 */
 	memcpy(writable->apfs_volname, label, len + 1);
 	memset(writable->apfs_volname + len + 1, 0,
@@ -132,6 +134,6 @@ int set_volume_label(const char *filename, const char *label, int vol_index,
 	close(wfd);
 
 	printf("卷[%d] 名称: \"%s\" -> \"%s\"（校验和已重算）\n", vol_index,
-	       (char *)raw->apfs_volname, label);
+	       old_name, label);
 	return 0;
 }

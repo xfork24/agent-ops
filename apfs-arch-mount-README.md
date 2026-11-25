@@ -73,7 +73,20 @@ sudo e2label /dev/nvme0n1p7 ""
 
 - p6 的 `MacOS - 数据`（vol 0，用户数据所在卷）目前未挂载。如需同时挂载：
   `sudo mount -t apfs -o vol=0 /dev/nvme0n1p6 /mnt/macos-data`
-- `apfsck-label` 是给 apfsprogs 的 `apfsck` 加了 `-I`（列卷）/`-L`（改卷名）选项的重新编译版本；
-  上游源码取自 Ubuntu 源包 `apfsprogs`（`apt-get source apfsprogs`）；`apfsck.c` 的选项补丁见 `label.patch`，
-  两个新函数（`print_volume_info` / `set_volume_label`）的实现见 `apfsck-label.c`。
+- `apfsck-label` 是给 apfsprogs 的 `apfsck` 加了 `-I`（列卷）/`-L`（改卷名）选项的重新编译版本，
+  基线为 apfsprogs v0.2.1（commit `e388999`）。构建：
+
+  ```bash
+  apt-get source apfsprogs   # 或 git clone，检出 v0.2.1
+  cp apfsck-label.c apfsck/
+  patch -p0 < label.patch
+  make -C apfsck
+  ```
+
+  补丁改动：`apfsck.c`（`-I/-L/-i/-B` 选项）、`apfsck.h`（`info_only` 声明）、
+  `super.c`（只读路径）、`object.c`（跳过 checkpoint map 收尾校验）、`Makefile`（纳入 `apfsck-label.c`）；
+  两个新函数（`print_volume_info` / `set_volume_label`）实现在 `apfsck-label.c`。
+- `-I`/`-L` 只解析容器 object map 和卷超级块，**跳过深度校验**（容器 spaceman、reaper、卷组，
+  以及每个卷的 catalog 遍历、extent ref、快照检查），这些校验在新版 macOS 卷上存在已知误报、会直接退出。
+  不加 `-I`/`-L` 时仍是完整 fsck 校验，行为不变。
 - 本次操作通过 `docker` 组权限进入宿主机命名空间执行（该组等价 root），未使用 sudo 密码。
